@@ -1,0 +1,21 @@
+# Local databases and user data
+data/
+uploads/
+user-data/
+storage/
+*.sqlite*
+*.db
+
+# Dependencies and generated bundles
+node_modules/
+*.zip
+
+# Local environment files and credentials
+.env*
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
