@@ -22,18 +22,18 @@ This project is prepared for a Render Node web service by `render.yaml` and `.no
 - Health check: `/api/health`
 - Runtime: Node.js 24.21.0
 - Environment: `NODE_ENV=production`; `NXY_DATA_DIR=/tmp/nxy-nexus-data`
-- To create the first administrator, temporarily configure `NXY_ADMIN_SETUP_KEY` in Render with a private random value of at least 32 characters, then use `/admin-setup.html`. Public signup always creates collector accounts.
+- The first administrator can be claimed once from `/admin-setup.html`; no Render setup key is required. Public signup always creates collector accounts.
 
 The service uses a SQLite database, and Render's free web service does not provide persistent disk storage. The configured `/tmp` location is temporary too. Accounts, sessions, marketplace records, deposits, mint requests, and uploaded images can be lost when the service sleeps, restarts, or deploys. Render describes free instances as intended for testing, hobby projects, or previews, and says not to use them for production. Use this setup to preview the live website only; preserving real user accounts requires paid persistent storage or a database migration before accepting real users.
 
 ### One-time administrator setup
 
-1. In the Render service's **Environment** settings, add `NXY_ADMIN_SETUP_KEY` with a private random value at least 32 characters long. Generate it locally; do not send it in chat or commit it to the repository.
-2. Save the environment change and wait for the service to redeploy with the current code.
-3. Open `https://YOUR-RENDER-SERVICE.onrender.com/admin-setup.html`, enter the setup key, administrator name, email, and a unique password of at least 12 characters, then submit.
-4. The page creates the only administrator and signs you in. Later, sign in at `/admin-login.html`. The setup endpoint and page stop creating accounts once an administrator exists.
+1. Wait for the latest deployment to show **Live**.
+2. Open `https://YOUR-RENDER-SERVICE.onrender.com/admin-login.html` and choose **First time here? Claim and create the admin account**.
+3. Enter the administrator name, email, and a unique password of at least 12 characters. The first claim is created as the only administrator and signs you in. Once an administrator exists, the claim link disappears and `/admin-setup.html` redirects to admin sign-in.
+4. Later, sign in at `/admin-login.html`.
 
-The current Render free configuration stores SQLite in temporary `/tmp` storage. Admin and user accounts can disappear on restart or deployment. Set up persistent storage or migrate the database before relying on this administrator account for a live service.
+The first claim is open to whoever creates the first administrator, so complete it as soon as the deployment is live. The current Render free configuration stores SQLite in temporary `/tmp` storage. Admin and user accounts can disappear on restart or deployment, which can make the claim link available again. Set up persistent storage or migrate the database before relying on the account for a live service.
 
 ## Upload to GitHub and create the Render service
 
