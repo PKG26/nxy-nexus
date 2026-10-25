@@ -71,7 +71,7 @@ const server=http.createServer(async(req,res)=>{
    return send(res,200,{settings,items,creators,metrics});
   }
   if(req.method==='GET'&&url.pathname==='/api/session'){
-   const s=sessionFor(req);return send(res,200,{authenticated:!!s,user:s?userSummary(s):null,csrf:s?.csrf||null,setup:db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get().n===0});
+   const s=sessionFor(req),setup=db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get().n===0,adminSetupAvailable=setup&&(process.env.NXY_ADMIN_SETUP_KEY||'').length>=32;return send(res,200,{authenticated:!!s,user:s?userSummary(s):null,csrf:s?.csrf||null,setup,adminSetupAvailable});
   }
   if(req.method==='POST'&&url.pathname==='/api/newsletter'){
    const input=await body(req),email=String(input.email||'').trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return send(res,400,{error:'Enter a valid email address.'});db.prepare('INSERT OR IGNORE INTO subscribers(email,created) VALUES(?,?)').run(email,now());return send(res,201,{ok:true});
