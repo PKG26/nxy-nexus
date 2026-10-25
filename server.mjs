@@ -76,6 +76,27 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='POST'&&url.pathname==='/api/newsletter'){
    const input=await body(req),email=String(input.email||'').trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return send(res,400,{error:'Enter a valid email address.'});db.prepare('INSERT OR IGNORE INTO subscribers(email,created) VALUES(?,?)').run(email,now());return send(res,201,{ok:true});
   }
+  if(req.method==='POST'&&url.pathname==='/api/admin/setup'){
+   if(!rateLimit(req,res,url.pathname))return;
+   const setupKey=process.env.NXY_ADMIN_SETUP_KEY||'';
+   if(setupKey.length<32)return send(res,503,{error:'Private administrator setup is not configured.'});
+   const input=await body(req),providedKey=String(input.setupKey||''),email=String(input.email||'').trim().toLowerCase(),username=String(input.username||'').trim(),password=String(input.password||'');
+   const suppliedHash=createHash('sha256').update(providedKey).digest(),expectedHash=createHash('sha256').update(setupKey).digest();
+   if(!timingSafeEqual(suppliedHash,expectedHash))return send(res,401,{error:'Setup key is incorrect.'});
+   if(username.length<2||username.length>40||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<12||password.length>200)return send(res,400,{error:'Enter a display name, valid email, and password of at least 12 characters.'});
+   db.exec('BEGIN IMMEDIATE');
+   try{
+    if(db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get()){db.exec('ROLLBACK');return send(res,410,{error:'Administrator setup has already been completed.'});}
+    const salt=randomBytes(16).toString('hex'),passhash=scryptSync(password,salt,64).toString('hex');
+    const result=db.prepare("INSERT INTO users(username,email,passhash,salt,role,created) VALUES(?,?,?,?, 'admin', ?)").run(username,email,passhash,salt,now());
+    const user=db.prepare('SELECT id,username,email,role,active FROM users WHERE id=?').get(result.lastInsertRowid);
+    const token=randomBytes(32).toString('base64url'),csrf=randomBytes(24).toString('base64url'),expires=Date.now()+30*24*60*60*1000;
+    db.prepare('INSERT INTO sessions(token_hash,user_id,csrf,expires) VALUES(?,?,?,?)').run(hash(token),user.id,csrf,expires);
+    db.exec('COMMIT');
+    const secureCookie=process.env.NODE_ENV==='production'?'; Secure':'';
+    return send(res,201,{user:userSummary(user),csrf},{'set-cookie':`${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${secureCookie}`});
+   }catch(error){db.exec('ROLLBACK');if(String(error.message).includes('UNIQUE'))return send(res,409,{error:'An account with this email already exists.'});throw error;}
+  }
   if(req.method==='POST'&&['/api/signup','/api/login','/api/admin/login'].includes(url.pathname)){
    if(!rateLimit(req,res,url.pathname))return;
    const input=await body(req),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||''),username=String(input.username||'').trim();
@@ -166,7 +187,12 @@ const server=http.createServer(async(req,res)=>{
    const s=requireAdmin(req,res);if(!s)return;const users=db.prepare('SELECT id,username,email,role,active,created FROM users ORDER BY id DESC LIMIT 100').all();const items=db.prepare('SELECT id,name,artist,price,category AS cat,image AS img,tag,active,owner_id FROM items ORDER BY id DESC').all();const bids=db.prepare('SELECT b.id,b.amount,b.status,b.created,u.username,i.name AS item FROM bids b JOIN users u ON u.id=b.user_id JOIN items i ON i.id=b.item_id ORDER BY b.id DESC LIMIT 100').all();const sales=db.prepare('SELECT s.id,s.amount,s.status,s.tx_hash AS txHash,s.created,u.username AS buyer,i.name AS item FROM sales s LEFT JOIN users u ON u.id=s.buyer_id JOIN items i ON i.id=s.item_id ORDER BY s.id DESC LIMIT 100').all();const deposits=db.prepare('SELECT d.id,d.amount,d.tx_hash AS txHash,d.status,d.created,u.username,u.email FROM deposit_requests d JOIN users u ON u.id=d.user_id ORDER BY d.id DESC LIMIT 100').all();const mints=db.prepare('SELECT m.id,m.title,m.description,m.image_url AS imageUrl,m.price,m.category,m.status,m.tx_hash AS txHash,m.created,m.collection_name AS collectionName,m.supply,m.royalty,m.sale_type AS saleType,m.wallet_address AS walletAddress,u.username,u.email FROM mint_requests m JOIN users u ON u.id=m.user_id ORDER BY m.id DESC LIMIT 100').all();const metrics={users:db.prepare('SELECT count(*) AS n FROM users').get().n,activeListings:db.prepare('SELECT count(*) AS n FROM items WHERE active=1').get().n,bids:db.prepare('SELECT count(*) AS n FROM bids').get().n,volume:db.prepare('SELECT COALESCE(sum(amount),0) AS n FROM bids').get().n};return send(res,200,{user:userSummary(s),settings:getSettings(),users,items,bids,sales,deposits,mints,metrics,csrf:s.csrf});
   }
   if(req.method==='GET'){
-   const requested=url.pathname==='/'?'/index.html':url.pathname;if(requested==='/admin.html'||requested==='/dashboard.html'){const user=sessionFor(req);if(!user){res.writeHead(302,{location:requested==='/admin.html'?'/admin-login.html':'/login.html?next=dashboard.html','cache-control':'no-store'});return res.end();}if(requested==='/admin.html'&&user.role!=='admin'){res.writeHead(302,{location:'/dashboard.html','cache-control':'no-store'});return res.end();}}
+   const requested=url.pathname==='/'?'/index.html':url.pathname;
+   if(requested==='/admin-setup.html'){
+    const setupEnabled=(process.env.NXY_ADMIN_SETUP_KEY||'').length>=32,adminExists=!!db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get();
+    if(!setupEnabled||adminExists){res.writeHead(302,{location:'/admin-login.html','cache-control':'no-store'});return res.end();}
+   }
+   if(requested==='/admin.html'||requested==='/dashboard.html'){const user=sessionFor(req);if(!user){res.writeHead(302,{location:requested==='/admin.html'?'/admin-login.html':'/login.html?next=dashboard.html','cache-control':'no-store'});return res.end();}if(requested==='/admin.html'&&user.role!=='admin'){res.writeHead(302,{location:'/dashboard.html','cache-control':'no-store'});return res.end();}}
    const file=path.resolve(root,'.'+requested);if(!file.startsWith(root+path.sep))return send(res,403,{error:'Forbidden.'});try{const bytes=await readFile(file);res.writeHead(200,{'content-type':mime[path.extname(file)]||'application/octet-stream','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'DENY','content-security-policy':"default-src 'self' https://images.unsplash.com https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"});return res.end(bytes);}catch{return send(res,404,{error:'Page not found.'});}
   }
   return send(res,405,{error:'Method not allowed.'});

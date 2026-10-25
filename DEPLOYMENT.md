@@ -11,7 +11,7 @@
 
 ## Deployment bundle
 
-`NXY-NEXUS-deploy.zip` contains the application source and `package.json`, but excludes `data/` and all local SQLite files. This protects the local database from being uploaded or overwritten. A fresh production database will be created after first launch; the first registered account becomes the administrator. Local accounts and records are not copied automatically.
+`NXY-NEXUS-deploy.zip` contains the application source and `package.json`, but excludes `data/` and all local SQLite files. This protects the local database from being uploaded or overwritten. A fresh production database will be created after first launch; public signup creates collector accounts only. Use the private one-time setup below to create the administrator. Local accounts and records are not copied automatically.
 
 ## Render free preview
 
@@ -22,9 +22,18 @@ This project is prepared for a Render Node web service by `render.yaml` and `.no
 - Health check: `/api/health`
 - Runtime: Node.js 24.21.0
 - Environment: `NODE_ENV=production`; `NXY_DATA_DIR=/tmp/nxy-nexus-data`
-- No API keys or other application environment secrets are required by the current source.
+- To create the first administrator, temporarily configure `NXY_ADMIN_SETUP_KEY` in Render with a private random value of at least 32 characters, then use `/admin-setup.html`. Public signup always creates collector accounts.
 
 The service uses a SQLite database, and Render's free web service does not provide persistent disk storage. The configured `/tmp` location is temporary too. Accounts, sessions, marketplace records, deposits, mint requests, and uploaded images can be lost when the service sleeps, restarts, or deploys. Render describes free instances as intended for testing, hobby projects, or previews, and says not to use them for production. Use this setup to preview the live website only; preserving real user accounts requires paid persistent storage or a database migration before accepting real users.
+
+### One-time administrator setup
+
+1. In the Render service's **Environment** settings, add `NXY_ADMIN_SETUP_KEY` with a private random value at least 32 characters long. Generate it locally; do not send it in chat or commit it to the repository.
+2. Save the environment change and wait for the service to redeploy with the current code.
+3. Open `https://YOUR-RENDER-SERVICE.onrender.com/admin-setup.html`, enter the setup key, administrator name, email, and a unique password of at least 12 characters, then submit.
+4. The page creates the only administrator and signs you in. Later, sign in at `/admin-login.html`. The setup endpoint and page stop creating accounts once an administrator exists.
+
+The current Render free configuration stores SQLite in temporary `/tmp` storage. Admin and user accounts can disappear on restart or deployment. Set up persistent storage or migrate the database before relying on this administrator account for a live service.
 
 ## Upload to GitHub and create the Render service
 
