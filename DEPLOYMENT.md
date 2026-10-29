@@ -7,6 +7,7 @@
 - `npm start` launches the server. It listens on Hostinger's `PORT` when set.
 - Persistent application data: SQLite database `data/nxy.sqlite` by default. Set `NXY_DATA_DIR` to select another writable persistent directory.
 - The database stores user accounts, password hashes, sessions, settings, marketplace records, deposits, and mint requests. NFT image uploads are kept as data URLs in the database.
+- Public live chat stores anonymous visitor conversations in the same SQLite database. Visitors can see replies again from the same browser.
 - `NODE_ENV=production` enables the Secure session cookie flag.
 
 ## Deployment bundle

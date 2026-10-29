@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS favorites(user_id INTEGER NOT NULL REFERENCES users(i
 CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), message TEXT NOT NULL, amount TEXT NOT NULL DEFAULT '', item_id INTEGER, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS subscribers(email TEXT PRIMARY KEY, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat_visitors(id INTEGER PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, last_seen TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat_messages(id INTEGER PRIMARY KEY, visitor_id INTEGER NOT NULL REFERENCES chat_visitors(id) ON DELETE CASCADE, sender TEXT NOT NULL CHECK(sender IN ('visitor','admin')), message TEXT NOT NULL, created TEXT NOT NULL, read_by_admin INTEGER NOT NULL DEFAULT 0, read_by_visitor INTEGER NOT NULL DEFAULT 0);
 `);
 for (const [column,definition] of [['collection_name',"TEXT NOT NULL DEFAULT ''"],['supply','INTEGER NOT NULL DEFAULT 1'],['royalty','REAL NOT NULL DEFAULT 5'],['sale_type',"TEXT NOT NULL DEFAULT 'Fixed price'"],['wallet_address',"TEXT NOT NULL DEFAULT ''"]]) {
  if (!db.prepare('PRAGMA table_info(mint_requests)').all().some(row=>row.name===column)) db.exec(`ALTER TABLE mint_requests ADD COLUMN ${column} ${definition}`);
@@ -61,6 +63,11 @@ function rateLimit(req,res,key){const ip=req.socket.remoteAddress||'unknown',k=i
 function getSettings(){return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,JSON.parse(x.value)]));}
 function setSettings(settings){const stmt=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const [k,v] of Object.entries(settings))stmt.run(k,JSON.stringify(v));}
 function userSummary(s){return {id:s.id,username:s.username,email:s.email,role:s.role};}
+function chatVisitor(req){
+ let token=getCookie(req,'nxy_chat');
+ if(token){try{token=decodeURIComponent(token)}catch{token=''}const found=token?db.prepare('SELECT id FROM chat_visitors WHERE token_hash=?').get(hash(token)):null;if(found){db.prepare('UPDATE chat_visitors SET last_seen=? WHERE id=?').run(now(),found.id);return {id:found.id,cookie:null}}}
+ token=randomBytes(32).toString('base64url');const created=now(),result=db.prepare('INSERT INTO chat_visitors(token_hash,created,last_seen) VALUES(?,?,?)').run(hash(token),created,created);const secureCookie=process.env.NODE_ENV==='production'?'; Secure':'';return {id:Number(result.lastInsertRowid),cookie:`nxy_chat=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=7776000${secureCookie}`};
+}
 const server=http.createServer(async(req,res)=>{
  try{
   const url=new URL(req.url,'http://localhost');
@@ -73,8 +80,14 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='GET'&&url.pathname==='/api/session'){
    const s=sessionFor(req),setup=db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get().n===0;return send(res,200,{authenticated:!!s,user:s?userSummary(s):null,csrf:s?.csrf||null,setup});
   }
+  if(req.method==='GET'&&url.pathname==='/api/chat/messages'){
+   const visitor=chatVisitor(req),messages=db.prepare('SELECT id,sender,message,created FROM chat_messages WHERE visitor_id=? ORDER BY id DESC LIMIT 100').all(visitor.id).reverse();return send(res,200,{messages},visitor.cookie?{'set-cookie':visitor.cookie}:{});
+  }
   if(req.method==='POST'&&url.pathname==='/api/newsletter'){
    const input=await body(req),email=String(input.email||'').trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return send(res,400,{error:'Enter a valid email address.'});db.prepare('INSERT OR IGNORE INTO subscribers(email,created) VALUES(?,?)').run(email,now());return send(res,201,{ok:true});
+  }
+  if(req.method==='POST'&&url.pathname==='/api/chat/messages'){
+   if(!rateLimit(req,res,'chat-message'))return;const input=await body(req),message=String(input.message||'').trim();if(message.length<1||message.length>1200)return send(res,400,{error:'Enter a message of up to 1,200 characters.'});const visitor=chatVisitor(req),result=db.prepare("INSERT INTO chat_messages(visitor_id,sender,message,created) VALUES(?,'visitor',?,?)").run(visitor.id,message,now());return send(res,201,{ok:true,id:result.lastInsertRowid},visitor.cookie?{'set-cookie':visitor.cookie}:{});
   }
   if(req.method==='POST'&&url.pathname==='/api/admin/setup'){
    if(!rateLimit(req,res,url.pathname))return;
@@ -149,6 +162,7 @@ const server=http.createServer(async(req,res)=>{
    }
    if(url.pathname.startsWith('/api/admin/')){
     if(s.role!=='admin')return send(res,403,{error:'Administrator access required.'});
+     const replyMatch=url.pathname.match(/^\/api\/admin\/chats\/(\d+)\/reply$/);if(replyMatch){const visitorId=Number(replyMatch[1]),message=String(input.message||'').trim();if(message.length<1||message.length>1200)return send(res,400,{error:'Enter a reply of up to 1,200 characters.'});if(!db.prepare('SELECT id FROM chat_visitors WHERE id=?').get(visitorId))return send(res,404,{error:'Chat conversation not found.'});const result=db.prepare("INSERT INTO chat_messages(visitor_id,sender,message,created,read_by_visitor) VALUES(?,'admin',?,?,0)").run(visitorId,message,now());return send(res,201,{ok:true,id:result.lastInsertRowid});}
      if(url.pathname==='/api/admin/settings'){const next=input.settings||{};const allowed=['announcement','headline','intro','siteActive','biddingActive','newsletterActive','rankingsActive','royalty','featured','creatorApps','walletEnabled','mintingEnabled','purchasesEnabled','depositNetwork','depositAsset','depositAddress'];const patch=Object.fromEntries(allowed.filter(k=>k in next).map(k=>[k,next[k]]));setSettings(patch);return send(res,200,{ok:true,settings:getSettings()});}
     if(url.pathname==='/api/admin/items'){if(input.action==='create'){const name=String(input.name||'').trim(),artist=String(input.artist||'NXY Creator').trim(),price=Number(input.price);if(name.length<2||name.length>80||!Number.isFinite(price)||price<=0)return send(res,400,{error:'Enter a title and a price above zero.'});const cat=['Art','Collectibles','3D'].includes(input.category)?input.category:'Art';const result=db.prepare('INSERT INTO items(name,artist,price,category,image,tag,active,created) VALUES(?,?,?,?,?,?,1,?)').run(name,artist,price.toFixed(3),cat,'photo-1618005182384-a83a8bd57fbe','NEW DROP',now());return send(res,201,{ok:true,id:result.lastInsertRowid});}const id=Number(input.id);if(input.action==='delete'){db.prepare('UPDATE items SET active=0 WHERE id=?').run(id);return send(res,200,{ok:true});}const changes={};for(const k of ['name','artist','price','tag'])if(k in input)changes[k]=String(input[k]).slice(0,100);if('active'in input)changes.active=input.active?1:0;if(!Object.keys(changes).length)return send(res,400,{error:'No changes provided.'});db.prepare(`UPDATE items SET ${Object.keys(changes).map(k=>`${k}=?`).join(',')} WHERE id=?`).run(...Object.values(changes),id);return send(res,200,{ok:true});}
     if(url.pathname==='/api/admin/users'){const id=Number(input.id);if(id===s.id)return send(res,400,{error:'You cannot suspend your own administrator account.'});const target=db.prepare('SELECT role FROM users WHERE id=?').get(id);if(!target||target.role==='admin')return send(res,400,{error:'Only collector accounts can be suspended here.'});db.prepare('UPDATE users SET active=? WHERE id=?').run(input.active?1:0,id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);return send(res,200,{ok:true});}
@@ -181,6 +195,12 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='GET'&&url.pathname==='/api/admin/overview'){
    const s=requireAdmin(req,res);if(!s)return;const users=db.prepare('SELECT id,username,email,role,active,created FROM users ORDER BY id DESC LIMIT 100').all();const items=db.prepare('SELECT id,name,artist,price,category AS cat,image AS img,tag,active,owner_id FROM items ORDER BY id DESC').all();const bids=db.prepare('SELECT b.id,b.amount,b.status,b.created,u.username,i.name AS item FROM bids b JOIN users u ON u.id=b.user_id JOIN items i ON i.id=b.item_id ORDER BY b.id DESC LIMIT 100').all();const sales=db.prepare('SELECT s.id,s.amount,s.status,s.tx_hash AS txHash,s.created,u.username AS buyer,i.name AS item FROM sales s LEFT JOIN users u ON u.id=s.buyer_id JOIN items i ON i.id=s.item_id ORDER BY s.id DESC LIMIT 100').all();const deposits=db.prepare('SELECT d.id,d.amount,d.tx_hash AS txHash,d.status,d.created,u.username,u.email FROM deposit_requests d JOIN users u ON u.id=d.user_id ORDER BY d.id DESC LIMIT 100').all();const mints=db.prepare('SELECT m.id,m.title,m.description,m.image_url AS imageUrl,m.price,m.category,m.status,m.tx_hash AS txHash,m.created,m.collection_name AS collectionName,m.supply,m.royalty,m.sale_type AS saleType,m.wallet_address AS walletAddress,u.username,u.email FROM mint_requests m JOIN users u ON u.id=m.user_id ORDER BY m.id DESC LIMIT 100').all();const metrics={users:db.prepare('SELECT count(*) AS n FROM users').get().n,activeListings:db.prepare('SELECT count(*) AS n FROM items WHERE active=1').get().n,bids:db.prepare('SELECT count(*) AS n FROM bids').get().n,volume:db.prepare('SELECT COALESCE(sum(amount),0) AS n FROM bids').get().n};return send(res,200,{user:userSummary(s),settings:getSettings(),users,items,bids,sales,deposits,mints,metrics,csrf:s.csrf});
+  }
+  if(req.method==='GET'&&url.pathname==='/api/admin/chats'){
+   const s=requireAdmin(req,res);if(!s)return;const chats=db.prepare("SELECT v.id,v.created,v.last_seen,(SELECT m.message FROM chat_messages m WHERE m.visitor_id=v.id ORDER BY m.id DESC LIMIT 1) AS last_message,(SELECT m.sender FROM chat_messages m WHERE m.visitor_id=v.id ORDER BY m.id DESC LIMIT 1) AS last_sender,(SELECT m.created FROM chat_messages m WHERE m.visitor_id=v.id ORDER BY m.id DESC LIMIT 1) AS last_created,(SELECT count(*) FROM chat_messages m WHERE m.visitor_id=v.id AND m.sender='visitor' AND m.read_by_admin=0) AS unread FROM chat_visitors v WHERE EXISTS(SELECT 1 FROM chat_messages m WHERE m.visitor_id=v.id) ORDER BY (SELECT max(m.id) FROM chat_messages m WHERE m.visitor_id=v.id) DESC LIMIT 100").all();return send(res,200,{chats});
+  }
+  if(req.method==='GET'&&/^\/api\/admin\/chats\/\d+$/.test(url.pathname)){
+   const s=requireAdmin(req,res);if(!s)return;const visitorId=Number(url.pathname.split('/').at(-1));if(!db.prepare('SELECT id FROM chat_visitors WHERE id=?').get(visitorId))return send(res,404,{error:'Chat conversation not found.'});db.prepare("UPDATE chat_messages SET read_by_admin=1 WHERE visitor_id=? AND sender='visitor'").run(visitorId);const messages=db.prepare('SELECT id,sender,message,created FROM chat_messages WHERE visitor_id=? ORDER BY id DESC LIMIT 200').all(visitorId).reverse();return send(res,200,{visitorId,messages});
   }
   if(req.method==='GET'){
    const requested=url.pathname==='/'?'/index.html':url.pathname;
