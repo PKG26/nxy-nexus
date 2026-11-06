@@ -14,7 +14,7 @@
 
 `NXY-NEXUS-deploy.zip` contains the application source and `package.json`, but excludes `data/` and all local SQLite files. This protects the local database from being uploaded or overwritten. A fresh production database will be created after first launch; public signup creates collector accounts only. Use the private one-time setup below to create the administrator. Local accounts and records are not copied automatically.
 
-## Render free preview
+## Render deployment with persistent storage
 
 This project is prepared for a Render Node web service by `render.yaml` and `.node-version`.
 
@@ -22,10 +22,12 @@ This project is prepared for a Render Node web service by `render.yaml` and `.no
 - Start command: `npm start`
 - Health check: `/api/health`
 - Runtime: Node.js 24.21.0
-- Environment: `NODE_ENV=production`; `NXY_DATA_DIR=/tmp/nxy-nexus-data`
+- Compute plan: Starter
+- Environment: `NODE_ENV=production`; `NXY_DATA_DIR=/var/data`
+- Persistent disk: 1 GB mounted at `/var/data`
 - The first administrator can be claimed once from `/admin-setup.html`; no Render setup key is required. Public signup always creates collector accounts.
 
-The service uses a SQLite database, and Render's free web service does not provide persistent disk storage. The configured `/tmp` location is temporary too. Accounts, sessions, marketplace records, deposits, mint requests, and uploaded images can be lost when the service sleeps, restarts, or deploys. Render describes free instances as intended for testing, hobby projects, or previews, and says not to use them for production. Use this setup to preview the live website only; preserving real user accounts requires paid persistent storage or a database migration before accepting real users.
+The app stores its SQLite database under `/var/data`, which is the disk mount. Only files under that directory persist across deploys and restarts. The current free `/tmp` database is not copied automatically when switching to the disk; export it before applying the new configuration if it still contains records that must be kept. A fresh database requires creating the administrator and collector accounts again.
 
 ### One-time administrator setup
 
@@ -34,7 +36,7 @@ The service uses a SQLite database, and Render's free web service does not provi
 3. Enter the administrator name, email, and a unique password of at least 12 characters. The first claim is created as the only administrator and signs you in. Once an administrator exists, the claim link disappears and `/admin-setup.html` redirects to admin sign-in.
 4. Later, sign in at `/admin-login.html`.
 
-The first claim is open to whoever creates the first administrator, so complete it as soon as the deployment is live. The current Render free configuration stores SQLite in temporary `/tmp` storage. Admin and user accounts can disappear on restart or deployment, which can make the claim link available again. Set up persistent storage or migrate the database before relying on the account for a live service.
+The first claim is open to whoever creates the first administrator, so complete it as soon as a fresh database is live. With persistent storage attached, the administrator and user accounts remain in the database across restarts and deploys.
 
 ## Upload to GitHub and create the Render service
 
@@ -51,8 +53,8 @@ The first claim is open to whoever creates the first administrator, so complete 
    ```
 
    Check `git status --short` before committing. The ignore rules exclude the local SQLite database, `.env` files, `node_modules`, and ZIP bundles. Do not force-push if GitHub reports a conflict; stop and inspect the repository first.
-3. In Render, choose **New → Blueprint** and connect the new GitHub repository. Render reads `render.yaml` and shows the service configuration for review. Confirm it is a free web service before creating it. Creating the service starts a deployment, so do this only when you are ready to publish.
-4. After Render reports the service is live, open its `onrender.com` URL and check `/api/health` for `{"ok":true}`. Then open the public page and verify signup/login. Because free storage is temporary, do not treat any accounts or transactions created there as durable.
+3. In Render, choose **New → Blueprint** and connect the GitHub repository. Render reads `render.yaml` and shows the service configuration for review. It specifies a Starter web service and a 1 GB persistent disk, which incurs a monthly charge. Confirm the plan and disk in Render before syncing if you have not already approved the charge.
+4. After Render reports the service is live, open its `onrender.com` URL and check `/api/health` for `{"ok":true}`. Then open the public page and verify signup/login.
 
 The `render.yaml` file sets the same commands and settings if you create a Web Service manually instead of using a Blueprint.
 
